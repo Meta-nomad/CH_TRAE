@@ -96,6 +96,7 @@ class LookupResult:
     coin_symbol: str
     best: MarketCandidate
     alternatives: list[MarketCandidate]
+    selection_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -103,6 +104,7 @@ class LookupResult:
             "coin_symbol": self.coin_symbol,
             "best": self.best.to_dict(),
             "alternatives": [item.to_dict() for item in self.alternatives],
+            "selection_reason": self.selection_reason,
         }
 
     @classmethod
@@ -112,6 +114,7 @@ class LookupResult:
             coin_symbol=payload["coin_symbol"],
             best=MarketCandidate.from_dict(payload["best"]),
             alternatives=[MarketCandidate.from_dict(item) for item in payload.get("alternatives", [])],
+            selection_reason=payload.get("selection_reason"),
         )
 
 

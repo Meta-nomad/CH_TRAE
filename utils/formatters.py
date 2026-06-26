@@ -26,6 +26,15 @@ def format_result(result: LookupResult) -> str:
         build_tradingview_link(best.tv_symbol),
     ]
 
+    if result.selection_reason:
+        lines.extend(
+            [
+                "",
+                "Причина выбора:",
+                result.selection_reason,
+            ]
+        )
+
     if best.hourly_gap_ratio is not None and best.flat_candle_ratio is not None:
         lines.extend(
             [

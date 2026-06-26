@@ -28,6 +28,8 @@ class HourlyQuality:
 
 
 class SymbolFinderService:
+    CACHE_VERSION = "v2"
+
     def __init__(
         self,
         *,
@@ -48,7 +50,8 @@ class SymbolFinderService:
         if not normalized:
             raise CoinNotFoundError
 
-        cached = await self._cache.get(normalized)
+        cache_key = f"{self.CACHE_VERSION}:{normalized}"
+        cached = await self._cache.get(cache_key)
         if cached:
             return LookupResult.from_dict(cached)
 
@@ -78,8 +81,9 @@ class SymbolFinderService:
             coin_symbol=coin.symbol,
             best=ranked[0],
             alternatives=ranked[1:4],
+            selection_reason=self._build_selection_reason(coin, ranked),
         )
-        await self._cache.set(normalized, result.to_dict())
+        await self._cache.set(cache_key, result.to_dict())
         return result
 
     async def _discover_candidates(self, coin: CoinIdentity, quotes: tuple[str, ...]) -> list[MarketCandidate]:
@@ -216,3 +220,59 @@ class SymbolFinderService:
             quote_priority(candidate.quote, coin.genesis_date),
             candidate.exchange_name,
         )
+
+    def _build_selection_reason(self, coin: CoinIdentity, ranked: list[MarketCandidate]) -> str | None:
+        if not ranked:
+            return None
+
+        best = ranked[0]
+        competitor = self._find_reference_candidate(best, ranked)
+        if competitor is None:
+            return None
+
+        if best.earliest_ts is not None and competitor.earliest_ts is not None and best.earliest_ts != competitor.earliest_ts:
+            delta_days = abs(best.earliest_ts - competitor.earliest_ts) // 86400
+            if best.earliest_ts < competitor.earliest_ts:
+                return (
+                    f"{best.quote} выбран, потому что история начинается раньше, чем у "
+                    f"{competitor.quote}, примерно на {delta_days} дн."
+                )
+
+        best_gap = best.hourly_gap_ratio if best.hourly_gap_ratio is not None else 1.0
+        competitor_gap = competitor.hourly_gap_ratio if competitor.hourly_gap_ratio is not None else 1.0
+        if abs(best_gap - competitor_gap) > 1e-9 and best_gap < competitor_gap:
+            return (
+                f"{best.quote} выбран, потому что при сопоставимой дате старта у него лучше "
+                f"часовой график: меньше гэпов."
+            )
+
+        best_flat = best.flat_candle_ratio if best.flat_candle_ratio is not None else 1.0
+        competitor_flat = competitor.flat_candle_ratio if competitor.flat_candle_ratio is not None else 1.0
+        if abs(best_flat - competitor_flat) > 1e-9 and best_flat < competitor_flat:
+            return (
+                f"{best.quote} выбран, потому что при сопоставимой дате старта у него меньше "
+                f"плоских свечей на часовом графике."
+            )
+
+        best_volume = best.volume_24h or best.volume_usd or 0.0
+        competitor_volume = competitor.volume_24h or competitor.volume_usd or 0.0
+        if best_volume > competitor_volume:
+            return (
+                f"{best.quote} выбран, потому что при близких истории и качестве графика "
+                f"у него выше торговый объём."
+            )
+
+        if best.quote == "USDT":
+            return "При полном равенстве выбран USDT как приоритетная котировка."
+
+        if best.quote == "USD":
+            return "USD выбран, потому что по итоговому сравнению он дал более сильный результат, чем USDT."
+
+        return None
+
+    def _find_reference_candidate(self, best: MarketCandidate, ranked: list[MarketCandidate]) -> MarketCandidate | None:
+        if best.quote == "USD":
+            return next((item for item in ranked[1:] if item.quote == "USDT"), ranked[1] if len(ranked) > 1 else None)
+        if best.quote == "USDT":
+            return next((item for item in ranked[1:] if item.quote == "USD"), ranked[1] if len(ranked) > 1 else None)
+        return ranked[1] if len(ranked) > 1 else None
